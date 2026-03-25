@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-service-cpu
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "prj-1774468882874966685.158.160.192.23.sslip.io"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: example-service-cpu
+                port:
+                  number: 8080
