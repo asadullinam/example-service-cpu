@@ -5,7 +5,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: "prj-1774468882874966685.158.160.192.23.sslip.io"
+    - host: "prj-1774541929232417761.158.160.192.23.sslip.io"
       http:
         paths:
           - path: /
