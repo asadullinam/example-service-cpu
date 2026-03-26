@@ -8,7 +8,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  PROJECT_ID: prj-1774541929232417761
+  PROJECT_ID: prj-1774560797201452611
   STAGE_SLUG: ${{ vars.STAGE_SLUG || 'production' }}
 
 permissions:
@@ -170,7 +170,6 @@ jobs:
           }
           retry_or_fail "deployment apply" sh -c 'sed "s#IMAGE_PLACEHOLDER#${IMAGE_NAME}#g" k8s/example-service-cpu/deployment.yaml | kubectl -n "$STAGE_SLUG" apply --validate=false -f -'
           retry_or_fail "service apply" kubectl -n "$STAGE_SLUG" apply --validate=false -f k8s/example-service-cpu/service.yaml
-          retry_or_fail "ingress apply" kubectl -n "$STAGE_SLUG" apply --validate=false -f k8s/example-service-cpu/ingress.yaml
 
       - name: Verify deployment
         run: |
