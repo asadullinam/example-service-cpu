@@ -8,7 +8,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  PROJECT_ID: prj-1774560797201452611
+  PROJECT_ID: prj-1774704001129980368
   STAGE_SLUG: ${{ vars.STAGE_SLUG || 'production' }}
 
 permissions:
@@ -168,18 +168,47 @@ jobs:
             echo "$description failed after 5 attempts"
             return 1
           }
-          retry_or_fail "deployment apply" sh -c 'sed "s#IMAGE_PLACEHOLDER#${IMAGE_NAME}#g" k8s/example-service-cpu/deployment.yaml | kubectl -n "$STAGE_SLUG" apply --validate=false -f -'
-          retry_or_fail "service apply" kubectl -n "$STAGE_SLUG" apply --validate=false -f k8s/example-service-cpu/service.yaml
+          retry_or_fail "deployment apply" sh -c 'sed "s#IMAGE_PLACEHOLDER#${IMAGE_NAME}#g" k8s/production/example-service-cpu/deployment.yaml | kubectl -n "$STAGE_SLUG" apply --validate=false -f -'
+          retry_or_fail "service apply" kubectl -n "$STAGE_SLUG" apply --validate=false -f k8s/production/example-service-cpu/service.yaml
+          retry_or_fail "ingress apply" kubectl -n "$STAGE_SLUG" apply --validate=false -f k8s/production/example-service-cpu/ingress.yaml
 
       - name: Verify deployment
         run: |
-          if ! kubectl -n "$STAGE_SLUG" rollout status deployment/example-service-cpu --timeout=180s; then
+          # Run rollout status in the background; poll for crash states to fail fast.
+          kubectl -n "$STAGE_SLUG" rollout status deployment/example-service-cpu --timeout=180s &
+          ROLLOUT_PID=$!
+          CRASHED=0
+          for _i in $(seq 1 36); do
+            sleep 5
+            if ! kill -0 "$ROLLOUT_PID" 2>/dev/null; then
+              break
+            fi
+            REASONS=$(kubectl -n "$STAGE_SLUG" get pods -l app=example-service-cpu \
+              -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.state.waiting.reason}{"\n"}{.lastState.terminated.reason}{"\n"}{end}{end}' 2>/dev/null || true)
+            if echo "$REASONS" | grep -qE '^(CrashLoopBackOff|OOMKilled|ImagePullBackOff|ErrImagePull|CreateContainerConfigError)$'; then
+              CRASHED=1
+              kill "$ROLLOUT_PID" 2>/dev/null || true
+              wait "$ROLLOUT_PID" 2>/dev/null || true
+              break
+            fi
+          done
+          if [ "$CRASHED" = "1" ]; then
+            echo "::error::Pod упал (CrashLoopBackOff/OOMKilled/ImagePullBackOff). Собираем диагностику..."
+            kubectl -n "$STAGE_SLUG" get pods -l app=example-service-cpu -o wide || true
+            kubectl -n "$STAGE_SLUG" describe pod -l app=example-service-cpu || true
+            kubectl -n "$STAGE_SLUG" logs -l app=example-service-cpu --tail=100 --previous 2>/dev/null \
+              || kubectl -n "$STAGE_SLUG" logs -l app=example-service-cpu --tail=100 || true
+            kubectl -n "$STAGE_SLUG" get events --sort-by=.lastTimestamp | tail -n 30 || true
+            exit 1
+          fi
+          wait "$ROLLOUT_PID"
+          ROLLOUT_RC=$?
+          if [ "$ROLLOUT_RC" != "0" ]; then
             DESIRED=$(kubectl -n "$STAGE_SLUG" get deployment/example-service-cpu -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0)
             UPDATED=$(kubectl -n "$STAGE_SLUG" get deployment/example-service-cpu -o jsonpath='{.status.updatedReplicas}' 2>/dev/null || echo 0)
-            READY=$(kubectl -n "$STAGE_SLUG" get deployment/example-service-cpu -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)
             AVAILABLE=$(kubectl -n "$STAGE_SLUG" get deployment/example-service-cpu -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
             if [ "${DESIRED:-0}" -gt 0 ] && [ "${UPDATED:-0}" -ge "${DESIRED:-0}" ] && [ "${AVAILABLE:-0}" -ge "${DESIRED:-0}" ]; then
-              echo "::warning::Rollout timed out while old replicas terminate, but new replicas are ready (desired=$DESIRED updated=$UPDATED ready=$READY available=$AVAILABLE). Continuing."
+              echo "::warning::Rollout timed out while old replicas terminate, but new replicas are ready. Continuing."
             else
               echo "::error::Rollout deployment/example-service-cpu не завершился за 180s. Собираем диагностику..."
               kubectl -n "$STAGE_SLUG" get deployment/example-service-cpu -o wide || true
